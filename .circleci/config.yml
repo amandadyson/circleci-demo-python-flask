@@ -1,82 +1,62 @@
-version: 2.1
-
-#########
-# Common
-#########
-orbs:
-  heroku: circleci/heroku@1.0.1
-
-############
-# Workflows
-############
-workflows:
-  version: 2
-  build-deploy:
-    jobs:
-      - build
-      - deploy:
-          requires:
-            - build
-          filters:
-            branches:
-              only: master
-
-##################
-# Job Definitions
-##################
+# Python CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-python/ for more details
+#
+version: 2
 jobs:
   build:
     docker:
-      - image: circleci/python:3.6.2-stretch-browsers
-        environment:
-          FLASK_CONFIG: testing
-          TEST_DATABASE_URL: postgresql://ubuntu@localhost/circle_test?sslmode=disable
-      - image: circleci/postgres:9.6.5-alpine-ram
-        environment:
-          POSTGRES_USER: ubuntu
-          POSTGRES_DB: circle_test
-          POSTGRES_PASSWORD: ''
-    steps:
-      - checkout
-      - run: mkdir test-reports
-      - run:
-          name: Download Selenium
-          command: |
-            curl -O http://selenium-release.storage.googleapis.com/3.5/selenium-server-standalone-3.5.3.jar
-      - run:
-          name: Start Selenium
-          command: |
-            java -jar selenium-server-standalone-3.5.3.jar -log test-reports/selenium.log
-          background: true
-      - restore_cache:
-          key: deps2-{{ checksum "requirements/dev.txt" }}
-      - run:
-          command: |
-            python3 -m venv venv
-            . venv/bin/activate
-            pip install -r requirements/dev.txt
-      - save_cache:
-          key: deps2-{{ checksum "requirements/dev.txt" }}
-          paths:
-            - 'venv'
-      - run:
-          command: |
-            . venv/bin/activate
-            python manage.py test
-      - store_artifacts:
-          path: test-reports/
-          destination: tr1
-      - store_test_results:
-          path: test-reports/
+    # Use the same Docker base as the project
+    - image: python:3.7.3-stretch
 
-  deploy:
-    executor: heroku/default
+    working_directory: ~/repo
+
     steps:
-      - checkout
-      - add_ssh_keys:
-          fingerprints:
-            - '48:a0:87:54:ca:75:32:12:c6:9e:a2:77:a4:7a:08:a4'
-      - heroku/install
-      - heroku/deploy-via-git:
-          force: true
+    - checkout
+    - setup_remote_docker:
+        docker_layer_caching: true
+
+    # Download and cache dependencies
+    - restore_cache:
+        keys:
+        - v1-dependencies-{{ checksum "requirements.txt" }}
+        # fallback to using the latest cache if no exact match is found
+        - v1-dependencies-
+
+    - run:
+        name: install dependencies
+        command: |
+                  python3 -m venv venv
+                  . venv/bin/activate
+                  make install
+                  # Install hadolint
+                  wget -O /bin/hadolint https://github.com/hadolint/hadolint/releases/download/v1.16.3/hadolint-Linux-x86_64 &&\
+                  chmod +x /bin/hadolint
+    - save_cache:
+        paths:
+        - ./venv
+        key: v1-dependencies-{{ checksum "requirements.txt" }}
+
+    # run lint!
+    - run:
+        name: run lint
+        command: |
+                  . venv/bin/activate
+                  make lint
+    
+    # run login
+    - run:
+          name: docker login
+          command: echo "$DOCKER_TOKEN" | docker login -u adrik976 --password-stdin
+    
+    # run build
+    - run:
+        name: Build Docker image
+        command: docker build --tag adrik976/udacity-prediction:latest .
+
+    # Push Docker image
+    - run:
+        name: Push to DockerHub
+        command: |
+            docker push adrik976/udacity-prediction:latest
 
